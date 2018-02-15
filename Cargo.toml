@@ -1,0 +1,6 @@
+[package]
+name = "Tail"
+version = "0.1.0"
+authors = ["tbess <timothy.bess@ignitionone.com>"]
+
+[dependencies]
