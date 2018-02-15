@@ -11,7 +11,7 @@ use std::io::{Read, Lines, BufRead, Seek};
 use std::collections::HashMap;
 use std::os::linux::fs::MetadataExt;
 use inotify::{Inotify, WatchMask, WatchDescriptor, EventMask};
-use argparse::{ArgumentParser, Print, Collect};
+use argparse::{ArgumentParser, Print, Collect, StoreTrue};
 
 static MAN_PAGE: &'static str = r#"
 NAME
@@ -144,6 +144,7 @@ impl StatefulFile {
 
 fn main() {
     let mut file_names: Vec<String> = Vec::new();
+    let mut follow_opt = false;
     {
         let mut parser = ArgumentParser::new();
         parser.set_description("Print the last 10 lines of each FILES to standard output.  With more than one FILES, precede each \
@@ -151,6 +152,8 @@ fn main() {
                                 With no FILES, or when FILES is -, read standard input.");
         parser.add_option(&["-V", "--version"],
                           Print(env!("CARGO_PKG_VERSION").to_string()), "Print version");
+        parser.refer(&mut follow_opt).add_option(&["-f", "--follow"],
+                                                 StoreTrue, "Output appended data as the file grows");
         parser.refer(&mut file_names)
             .add_argument("files", Collect, "FILES");
         parser.parse_args_or_exit();
@@ -167,15 +170,17 @@ fn main() {
         files.insert(wd, sf);
     }
 
-    let mut buffer = [0u8; 4096];
-    loop {
-        let events = watcher.read_events_blocking(&mut buffer)
-            .expect("Failed to read inotify events");
+    if follow_opt {
+        let mut buffer = [0u8; 4096];
+        loop {
+            let events = watcher.read_events_blocking(&mut buffer)
+                .expect("Failed to read inotify events");
 
-        for event in events {
-            if event.mask.contains(EventMask::CLOSE_WRITE) {
-                let sf = files.get_mut(&event.wd).unwrap();
-                follow(sf, event.mask);
+            for event in events {
+                if event.mask.contains(EventMask::CLOSE_WRITE) {
+                    let sf = files.get_mut(&event.wd).unwrap();
+                    follow(sf, event.mask);
+                }
             }
         }
     }
