@@ -1,2 +1,2 @@
 # Tail
-Event driven rewrite of Tail
+Rust rewrite of Tail
