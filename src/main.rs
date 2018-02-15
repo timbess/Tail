@@ -5,9 +5,9 @@ use std::path::Path;
 use std::iter::Iterator;
 use std::fs::{File, Metadata};
 use std::os::linux::fs::MetadataExt;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Lines, BufRead, Seek, BufReader, SeekFrom};
-use inotify::{Inotify, WatchMask, WatchDescriptor, EventMask};
+use inotify::{Inotify, WatchMask, WatchDescriptor, EventMask, Event};
 use argparse::{ArgumentParser, Print, Collect, StoreTrue};
 
 static MAN_PAGE: &'static str = r#"
@@ -117,9 +117,9 @@ impl StatefulFile {
     fn modification_type(&self) -> ModificationType {
         let new_metadata = self.fd.get_ref().metadata()
             .unwrap_or_else(|_| { panic!("Could not retrieve metadata for file: {}", self.file_name) });
-        if new_metadata.st_size() > self.old_metadata.st_size() {
+        if new_metadata.len() > self.old_metadata.len() {
             ModificationType::Added
-        } else if new_metadata.st_size() < self.old_metadata.st_size() {
+        } else if new_metadata.len() < self.old_metadata.len() {
             ModificationType::Removed
         } else {
             ModificationType::NoChange
@@ -128,9 +128,13 @@ impl StatefulFile {
 
     fn seek_to_cursor(&mut self) {
         self.fd.seek(self.cursor);
+        let offset = self.fd.seek(SeekFrom::Current(0)).unwrap();
+        println!("Seek to offset: {}", offset);
     }
 
     fn update_cursor(&mut self) {
+        let offset = self.fd.seek(SeekFrom::Current(0)).unwrap();
+        println!("Updating offset to: {}", offset);
         self.cursor = SeekFrom::Start(self.fd.seek(SeekFrom::Current(0)).unwrap());
     }
 
@@ -158,49 +162,90 @@ fn main() {
     let mut watcher = Inotify::init().expect("Inotify failed to initialize");
     let mut files = HashMap::new();
     for file_name in file_names {
-        let mut wd = watcher.add_watch(Path::new(&file_name), WatchMask::CLOSE_WRITE)
+        let mut wd = watcher.add_watch(Path::new(&file_name),
+                                       WatchMask::CLOSE_WRITE | WatchMask::MODIFY)
             .unwrap_or_else(|_| panic!("Failed to attach watcher to file: {}", &file_name));
         let mut fd = File::open(&file_name)
             .unwrap_or_else(|_| panic!("Failed to open file handle for: {}", &file_name));
         let mut sf = StatefulFile::new(fd, file_name);
-        print_from_cursor(&mut sf);
+        initial_print(&mut sf, 10);
+        sf.update_cursor();
         files.insert(wd, sf);
     }
 
     if follow_opt {
         let mut buffer = [0u8; 4096];
+        let mut prev_mod_type: Option<ModificationType> = None;
         loop {
             let events = watcher.read_events_blocking(&mut buffer)
                 .expect("Failed to read inotify events");
 
             for event in events {
-                if event.mask.contains(EventMask::CLOSE_WRITE) {
+                // println!("{:?}", event);
+                if event.mask.intersects(EventMask::CLOSE_WRITE | EventMask::MODIFY) {
                     let sf = files.get_mut(&event.wd).unwrap();
-                    follow(sf, event.mask);
+                    prev_mod_type = Some(follow(sf, event.mask, &prev_mod_type));
                 }
             }
         }
     }
 }
 
-fn follow(sf: &mut StatefulFile, event: EventMask) {
-    match sf.modification_type() {
-        ModificationType::Added => {}
+fn follow(sf: &mut StatefulFile, event: EventMask, prev_mod_type: &Option<ModificationType>) -> ModificationType {
+    let mod_type = sf.modification_type();
+    match mod_type {
+        ModificationType::Added => {
+            // println!("Added")
+        }
         ModificationType::Removed => {
+            // println!("Removed");
+            if event.contains(EventMask::MODIFY) {
+                // println!("Modify");
+                return mod_type;
+            }
+            // println!("Close");
             sf.reset_cursor();
         }
         ModificationType::NoChange => {
-            sf.reset_cursor();
+            // println!("No Change");
+            if event.contains(EventMask::MODIFY) {
+                // println!("Modify");
+                return mod_type;
+            }
+            // println!("Close");
+            match prev_mod_type {
+                &Some(ref prev_mod_type) => {
+                    match prev_mod_type {
+                        &ModificationType::Removed => {sf.reset_cursor()}
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
         }
     }
     sf.update_metadata();
+    sf.seek_to_cursor();
     print_from_cursor(sf);
+    sf.update_cursor();
+    return mod_type;
+}
+
+fn initial_print(sf: &mut StatefulFile, num_lines: usize) {
+    let mut last_n_lines = VecDeque::new();
+    for line in sf.fd.by_ref().lines().map(|l| l.unwrap()) {
+        last_n_lines.push_front(line);
+        if last_n_lines.len() > num_lines {
+            last_n_lines.pop_back();
+        }
+    }
+    while !last_n_lines.is_empty() {
+        println!("{}", last_n_lines.pop_back().unwrap());
+    }
 }
 
 fn print_from_cursor(sf: &mut StatefulFile) {
-    sf.seek_to_cursor();
     for line in sf.fd.by_ref().lines().map(|l| l.unwrap()) {
         println!("{}", line);
     }
-    sf.update_cursor();
 }
