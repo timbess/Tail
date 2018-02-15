@@ -4,9 +4,13 @@ extern crate argparse;
 use std::path::Path;
 use std::iter::Iterator;
 use std::fs::File;
-use std::io::Read;
+use std::fs::Metadata;
+use std::io::SeekFrom;
+use std::io::BufReader;
+use std::io::{Read, Lines, BufRead, Seek};
 use std::collections::HashMap;
-use inotify::{Inotify, WatchMask, WatchDescriptor, EventMask, Event};
+use std::os::linux::fs::MetadataExt;
+use inotify::{Inotify, WatchMask, WatchDescriptor, EventMask};
 use argparse::{ArgumentParser, Print, Collect};
 
 static MAN_PAGE: &'static str = r#"
@@ -83,6 +87,61 @@ AUTHOR
 
 "#;
 
+enum ModificationType {
+    Added,
+    Removed,
+    NoChange,
+}
+
+#[derive(Debug)]
+struct StatefulFile {
+    pub fd: BufReader<File>,
+    pub old_metadata: Metadata,
+    file_name: String,
+    cursor: SeekFrom,
+}
+
+impl StatefulFile {
+    fn new(fd: File, file_name: String) -> Self {
+        StatefulFile {
+            old_metadata: fd.metadata()
+                .unwrap_or_else(|_| { panic!("Could not retrieve metadata for file: {}", &file_name) }),
+            fd: BufReader::new(fd),
+            file_name: file_name,
+            cursor: SeekFrom::Start(0),
+        }
+    }
+
+    fn update_metadata(&mut self) {
+        self.old_metadata = self.fd.get_ref().metadata()
+            .unwrap_or_else(|_| { panic!("Could not retrieve metadata for file: {}", self.file_name) });
+    }
+
+    fn modification_type(&self) -> ModificationType {
+        let new_metadata = self.fd.get_ref().metadata()
+            .unwrap_or_else(|_| { panic!("Could not retrieve metadata for file: {}", self.file_name) });
+        if new_metadata.st_size() > self.old_metadata.st_size() {
+            ModificationType::Added
+        } else if new_metadata.st_size() < self.old_metadata.st_size() {
+            ModificationType::Removed
+        } else {
+            ModificationType::NoChange
+        }
+    }
+
+    fn seek_to_cursor(&mut self) {
+        self.fd.seek(self.cursor);
+    }
+
+    fn update_cursor(&mut self) {
+        self.cursor = SeekFrom::Start(self.fd.seek(SeekFrom::Current(0)).unwrap());
+    }
+
+    fn reset_cursor(&mut self) {
+        self.cursor = SeekFrom::Start(0);
+    }
+}
+
 fn main() {
     let mut file_names: Vec<String> = Vec::new();
     {
@@ -99,11 +158,13 @@ fn main() {
     let mut watcher = Inotify::init().expect("Inotify failed to initialize");
     let mut files = HashMap::new();
     for file_name in file_names {
-        let mut wd = watcher.add_watch(Path::new(&file_name), WatchMask::MODIFY | WatchMask::CLOSE)
+        let mut wd = watcher.add_watch(Path::new(&file_name), WatchMask::CLOSE_WRITE)
             .unwrap_or_else(|_| panic!("Failed to attach watcher to file: {}", &file_name));
         let mut fd = File::open(&file_name)
             .unwrap_or_else(|_| panic!("Failed to open file handle for: {}", &file_name));
-        files.insert(wd, (fd, file_name));
+        let mut sf = StatefulFile::new(fd, file_name);
+        print_from_cursor(&mut sf);
+        files.insert(wd, sf);
     }
 
     let mut buffer = [0u8; 4096];
@@ -112,11 +173,32 @@ fn main() {
             .expect("Failed to read inotify events");
 
         for event in events {
-            if event.mask.contains(EventMask::MODIFY) {
-                println!("Modified!");
-                println!("File handle: {:?}", files.get(&event.wd).unwrap());
+            if event.mask.contains(EventMask::CLOSE_WRITE) {
+                let sf = files.get_mut(&event.wd).unwrap();
+                follow(sf, event.mask);
             }
-            println!("{:?}", event);
         }
     }
+}
+
+fn follow(sf: &mut StatefulFile, event: EventMask) {
+    match sf.modification_type() {
+        ModificationType::Added => {}
+        ModificationType::Removed => {
+            sf.reset_cursor();
+        }
+        ModificationType::NoChange => {
+            sf.reset_cursor();
+        }
+    }
+    sf.update_metadata();
+    print_from_cursor(sf);
+}
+
+fn print_from_cursor(sf: &mut StatefulFile) {
+    sf.seek_to_cursor();
+    for line in sf.fd.by_ref().lines().map(|l| l.unwrap()) {
+        println!("{}", line);
+    }
+    sf.update_cursor();
 }
