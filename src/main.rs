@@ -3,13 +3,10 @@ extern crate argparse;
 
 use std::path::Path;
 use std::iter::Iterator;
-use std::fs::File;
-use std::fs::Metadata;
-use std::io::SeekFrom;
-use std::io::BufReader;
-use std::io::{Read, Lines, BufRead, Seek};
-use std::collections::HashMap;
+use std::fs::{File, Metadata};
 use std::os::linux::fs::MetadataExt;
+use std::collections::HashMap;
+use std::io::{Read, Lines, BufRead, Seek, BufReader, SeekFrom};
 use inotify::{Inotify, WatchMask, WatchDescriptor, EventMask};
 use argparse::{ArgumentParser, Print, Collect, StoreTrue};
 
