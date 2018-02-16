@@ -130,14 +130,13 @@ fn main() {
     opts.optflag("F", "", "same as follow with --retry");
     opts.optopt("n", "lines", "output the last NUM lines, instead of the last 10", "NUM");
     opts.optflag("h", "help", "print this help menu");
-//    opts.optmulti("", "", "files to tail", "[FILE]");
+
     let matches = match opts.parse(&args[1..]) {
         Ok(m) => m,
         Err(f) => { panic!(f.to_string()) }
     };
 
     if matches.opt_present("h") {
-//        print!("{}", opts.usage(""));
         print_usage();
     }
 
