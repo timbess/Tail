@@ -201,8 +201,8 @@ fn initial_print(sf: &mut StatefulFile, num_lines_str: &String) {
             last_n_lines.pop_back();
         }
     }
-    while !last_n_lines.is_empty() {
-        println!("{}", last_n_lines.pop_back().unwrap());
+    while let Some(line) = last_n_lines.pop_back() {
+        println!("{}", line);
     }
 }
 
