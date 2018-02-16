@@ -4,12 +4,12 @@ extern crate argparse;
 use std::path::Path;
 use std::iter::Iterator;
 use std::fs::{File, Metadata};
-use std::os::linux::fs::MetadataExt;
 use std::collections::{HashMap, VecDeque};
-use std::io::{Read, Lines, BufRead, Seek, BufReader, SeekFrom};
-use inotify::{Inotify, WatchMask, WatchDescriptor, EventMask, Event};
+use std::io::{Read, BufRead, Seek, BufReader, SeekFrom};
+use inotify::{Inotify, WatchMask, EventMask};
 use argparse::{ArgumentParser, Print, Collect, StoreTrue};
 
+#[allow(dead_code)]
 static MAN_PAGE: &'static str = r#"
 NAME
        tail - output the last part of files
@@ -127,14 +127,10 @@ impl StatefulFile {
     }
 
     fn seek_to_cursor(&mut self) {
-        self.fd.seek(self.cursor);
-        let offset = self.fd.seek(SeekFrom::Current(0)).unwrap();
-        println!("Seek to offset: {}", offset);
+        self.fd.seek(self.cursor).unwrap();
     }
 
     fn update_cursor(&mut self) {
-        let offset = self.fd.seek(SeekFrom::Current(0)).unwrap();
-        println!("Updating offset to: {}", offset);
         self.cursor = SeekFrom::Start(self.fd.seek(SeekFrom::Current(0)).unwrap());
     }
 
@@ -162,8 +158,7 @@ fn main() {
     let mut watcher = Inotify::init().expect("Inotify failed to initialize");
     let mut files = HashMap::new();
     for file_name in file_names {
-        let mut wd = watcher.add_watch(Path::new(&file_name),
-                                       WatchMask::CLOSE_WRITE | WatchMask::MODIFY)
+        let mut wd = watcher.add_watch(Path::new(&file_name), WatchMask::MODIFY)
             .unwrap_or_else(|_| panic!("Failed to attach watcher to file: {}", &file_name));
         let mut fd = File::open(&file_name)
             .unwrap_or_else(|_| panic!("Failed to open file handle for: {}", &file_name));
@@ -175,60 +170,32 @@ fn main() {
 
     if follow_opt {
         let mut buffer = [0u8; 4096];
-        let mut prev_mod_type: Option<ModificationType> = None;
         loop {
             let events = watcher.read_events_blocking(&mut buffer)
                 .expect("Failed to read inotify events");
 
             for event in events {
-                // println!("{:?}", event);
-                if event.mask.intersects(EventMask::CLOSE_WRITE | EventMask::MODIFY) {
+                if event.mask.contains(EventMask::MODIFY) {
                     let sf = files.get_mut(&event.wd).unwrap();
-                    prev_mod_type = Some(follow(sf, event.mask, &prev_mod_type));
+                    follow(sf);
                 }
             }
         }
     }
 }
 
-fn follow(sf: &mut StatefulFile, event: EventMask, prev_mod_type: &Option<ModificationType>) -> ModificationType {
-    let mod_type = sf.modification_type();
-    match mod_type {
-        ModificationType::Added => {
-            // println!("Added")
-        }
+fn follow(sf: &mut StatefulFile) {
+    match sf.modification_type() {
+        ModificationType::Added => {}
         ModificationType::Removed => {
-            // println!("Removed");
-            if event.contains(EventMask::MODIFY) {
-                // println!("Modify");
-                return mod_type;
-            }
-            // println!("Close");
             sf.reset_cursor();
         }
-        ModificationType::NoChange => {
-            // println!("No Change");
-            if event.contains(EventMask::MODIFY) {
-                // println!("Modify");
-                return mod_type;
-            }
-            // println!("Close");
-            match prev_mod_type {
-                &Some(ref prev_mod_type) => {
-                    match prev_mod_type {
-                        &ModificationType::Removed => {sf.reset_cursor()}
-                        _ => {}
-                    }
-                }
-                _ => {}
-            }
-        }
+        ModificationType::NoChange => {}
     }
     sf.update_metadata();
     sf.seek_to_cursor();
     print_from_cursor(sf);
     sf.update_cursor();
-    return mod_type;
 }
 
 fn initial_print(sf: &mut StatefulFile, num_lines: usize) {

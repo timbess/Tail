@@ -1,5 +1,5 @@
 [package]
-name = "Tail"
+name = "tail"
 version = "0.1.0"
 authors = ["tbess <timothy.bess@ignitionone.com>"]
 
