@@ -1,13 +1,15 @@
 extern crate inotify;
 extern crate getopts;
+extern crate tail;
 
 use std::path::Path;
 use std::iter::Iterator;
-use std::fs::{File, Metadata};
-use std::collections::{HashMap};
-use std::io::{Read, BufRead, Seek, BufReader, SeekFrom};
+use std::io::{Read, BufRead};
+use std::fs::File;
+use std::collections::HashMap;
 use inotify::{Inotify, WatchMask, EventMask};
 use getopts::Options;
+use tail::{StatefulFile, ModificationType, RingBuffer};
 
 #[allow(dead_code)]
 static USAGE: &'static str = r#"Usage: tail [OPTION]... [FILE]...
@@ -40,109 +42,6 @@ rotation).  Use --follow=name in that case.  That causes tail to track the
 named file in a way that accommodates renaming, removal and creation.
 "#;
 
-enum ModificationType {
-    Added,
-    Removed,
-    NoChange,
-}
-
-#[allow(dead_code)]
-enum Input {
-    File(File),
-    Stdin(std::io::Stdin),
-}
-
-struct RingBuffer<T> {
-    backing_arr: Box<[Option<T>]>,
-    tail: usize,
-    head: usize
-}
-
-impl<T: std::clone::Clone> RingBuffer<T> {
-    fn new(cap: usize) -> Self {
-        RingBuffer {
-            backing_arr: vec![Default::default(); cap].into_boxed_slice(),
-            tail: 0,
-            head: 0
-        }
-    }
-
-    fn push_front(&mut self, elm: T) {
-        if self.backing_arr[self.tail].is_some() {
-            self.head = (self.head + 1) % self.backing_arr.len();
-        }
-        std::mem::replace(&mut self.backing_arr[self.tail], Some(elm));
-        self.tail = (self.tail + 1) % self.backing_arr.len();
-    }
-
-    #[allow(dead_code)]
-    fn pop_front(&mut self) -> Option<T> {
-        if self.head == self.tail {
-            return None;
-        }
-        // Handle negative modulus correctly. Unforunately % is remainder not modulo
-        self.tail = (((self.tail - 1) % self.backing_arr.len()) + self.backing_arr.len()) % self.backing_arr.len();
-        self.backing_arr[self.tail].take()
-   }
-
-    fn pop_back(&mut self) -> Option<T> {
-        if self.head == self.tail {
-            return None;
-        }
-        let ret = self.backing_arr[self.head].take();
-        self.head = (self.head + 1) % self.backing_arr.len();
-        ret
-   }
-}
-
-#[derive(Debug)]
-struct StatefulFile {
-    pub fd: BufReader<File>,
-    pub old_metadata: Metadata,
-    file_name: String,
-    cursor: SeekFrom,
-}
-
-impl StatefulFile {
-    fn new(fd: File, file_name: String) -> Self {
-        StatefulFile {
-            old_metadata: fd.metadata()
-                .unwrap_or_else(|_| { panic!("Could not retrieve metadata for file: {}", &file_name) }),
-            fd: BufReader::new(fd),
-            file_name: file_name,
-            cursor: SeekFrom::Start(0),
-        }
-    }
-
-    fn update_metadata(&mut self) {
-        self.old_metadata = self.fd.get_ref().metadata()
-            .unwrap_or_else(|_| { panic!("Could not retrieve metadata for file: {}", self.file_name) });
-    }
-
-    fn modification_type(&self) -> ModificationType {
-        let new_metadata = self.fd.get_ref().metadata()
-            .unwrap_or_else(|_| { panic!("Could not retrieve metadata for file: {}", self.file_name) });
-        if new_metadata.len() > self.old_metadata.len() {
-            ModificationType::Added
-        } else if new_metadata.len() < self.old_metadata.len() {
-            ModificationType::Removed
-        } else {
-            ModificationType::NoChange
-        }
-    }
-
-    fn seek_to_cursor(&mut self) {
-        self.fd.seek(self.cursor).unwrap();
-    }
-
-    fn update_cursor(&mut self) {
-        self.cursor = SeekFrom::Start(self.fd.seek(SeekFrom::Current(0)).unwrap());
-    }
-
-    fn reset_cursor(&mut self) {
-        self.cursor = SeekFrom::Start(0);
-    }
-}
 
 fn print_usage() {
     print!("{}", USAGE);
