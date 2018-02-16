@@ -4,7 +4,7 @@ extern crate getopts;
 use std::path::Path;
 use std::iter::Iterator;
 use std::fs::{File, Metadata};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap};
 use std::io::{Read, BufRead, Seek, BufReader, SeekFrom};
 use inotify::{Inotify, WatchMask, EventMask};
 use getopts::Options;
@@ -46,6 +46,7 @@ enum ModificationType {
     NoChange,
 }
 
+#[allow(dead_code)]
 enum Input {
     File(File),
     Stdin(std::io::Stdin),
@@ -74,6 +75,7 @@ impl<T: std::clone::Clone> RingBuffer<T> {
         self.tail = (self.tail + 1) % self.backing_arr.len();
     }
 
+    #[allow(dead_code)]
     fn pop_front(&mut self) -> Option<T> {
         if self.head == self.tail {
             return None;
@@ -225,7 +227,7 @@ fn follow(sf: &mut StatefulFile) {
 }
 
 fn initial_print(sf: &mut StatefulFile, num_lines_str: &String) {
-    let mut line_iter = sf.fd.by_ref().lines().map(|l| l.unwrap());
+    let line_iter = sf.fd.by_ref().lines().map(|l| l.unwrap());
     if num_lines_str.starts_with("+") {
         let line_iter = line_iter.skip(num_lines_str.chars().skip(1).collect::<String>().parse::<usize>()
             .unwrap_or_else(|_| panic!("Incorrect number of lines given: {}", &num_lines_str)));
