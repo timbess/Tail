@@ -53,19 +53,44 @@ enum Input {
 
 struct RingBuffer<T> {
     backing_arr: Box<[Option<T>]>,
-    size: usize,
+    tail: usize,
+    head: usize
 }
 
 impl<T: std::clone::Clone> RingBuffer<T> {
     fn new(cap: usize) -> Self {
         RingBuffer {
             backing_arr: vec![Default::default(); cap].into_boxed_slice(),
-            size: 0
+            tail: 0,
+            head: 0
         }
     }
 
-    fn push(elm: T) {
+    fn push_front(&mut self, elm: T) {
+        if self.backing_arr[self.tail].is_some() {
+            self.head = (self.head + 1) % self.backing_arr.len();
+        }
+        std::mem::replace(&mut self.backing_arr[self.tail], Some(elm));
+        self.tail = (self.tail + 1) % self.backing_arr.len();
     }
+
+    fn pop_front(&mut self) -> Option<T> {
+        if self.head == self.tail {
+            return None;
+        }
+        // Handle negative modulus correctly. Unforunately % is remainder not modulo
+        self.tail = (((self.tail - 1) % self.backing_arr.len()) + self.backing_arr.len()) % self.backing_arr.len();
+        self.backing_arr[self.tail].take()
+   }
+
+    fn pop_back(&mut self) -> Option<T> {
+        if self.head == self.tail {
+            return None;
+        }
+        let ret = self.backing_arr[self.head].take();
+        self.head = (self.head + 1) % self.backing_arr.len();
+        ret
+   }
 }
 
 #[derive(Debug)]
@@ -200,7 +225,6 @@ fn follow(sf: &mut StatefulFile) {
 }
 
 fn initial_print(sf: &mut StatefulFile, num_lines_str: &String) {
-    let mut last_n_lines = VecDeque::new();
     let mut line_iter = sf.fd.by_ref().lines().map(|l| l.unwrap());
     if num_lines_str.starts_with("+") {
         let line_iter = line_iter.skip(num_lines_str.chars().skip(1).collect::<String>().parse::<usize>()
@@ -212,11 +236,10 @@ fn initial_print(sf: &mut StatefulFile, num_lines_str: &String) {
     }
     let num_lines = num_lines_str.parse::<usize>()
         .unwrap_or_else(|_| panic!("Incorrect number of lines given: {}", &num_lines_str));
+
+    let mut last_n_lines = RingBuffer::new(num_lines);
     for line in line_iter {
         last_n_lines.push_front(line);
-        if last_n_lines.len() > num_lines {
-            last_n_lines.pop_back();
-        }
     }
     while let Some(line) = last_n_lines.pop_back() {
         println!("{}", line);
