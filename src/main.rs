@@ -17,31 +17,16 @@ With more than one FILE, precede each with a header giving the file name.
 With no FILE, or when FILE is -, read standard input.
 
 Mandatory arguments to long options are mandatory for short options too.
-  -c, --bytes=[+]NUM       output the last NUM bytes; or use -c +NUM to
+  -c, --bytes=[+]NUM      output the last NUM bytes; or use -c +NUM to
                              output starting with byte NUM of each file
-  -f, --follow[={name|descriptor}]
-                           output appended data as the file grows;
-                             an absent option argument means 'descriptor'
+  -f, --follow            output appended data as the file grows;
   -F                       same as --follow=name --retry
   -n, --lines=[+]NUM       output the last NUM lines, instead of the last 10;
                              or use -n +NUM to output starting with line NUM
-      --max-unchanged-stats=N
-                           with --follow=name, reopen a FILE which has not
-                             changed size after N (default 5) iterations
-                             to see if it has been unlinked or renamed
-                             (this is the usual case of rotated log files);
-                             with inotify, this option is rarely useful
-      --pid=PID            with -f, terminate after process ID, PID dies
-  -q, --quiet, --silent    never output headers giving file names
-      --retry              keep trying to open a file if it is inaccessible
-  -s, --sleep-interval=N   with -f, sleep for approximately N seconds
-                             (default 1.0) between iterations;
-                             with inotify and --pid=P, check process P at
-                             least once every N seconds
+  -q, --quiet              never output headers giving file names
   -v, --verbose            always output headers giving file names
-  -z, --zero-terminated    line delimiter is NUL, not newline
-      --help     display this help and exit
-      --version  output version information and exit
+  -h, --help     display this help and exit
+  -V, --version  output version information and exit
 
 NUM may have a multiplier suffix:
 b 512, kB 1000, K 1024, MB 1000*1000, M 1024*1024,
@@ -129,6 +114,7 @@ fn main() {
     opts.optflag("F", "", "same as follow with --retry");
     opts.optopt("n", "lines", "output the last NUM lines, instead of the last 10", "NUM");
     opts.optflag("h", "help", "print this help menu");
+    opts.optflag("V", "version", "version of program");
 
     let matches = match opts.parse(&args[1..]) {
         Ok(m) => m,
@@ -137,6 +123,10 @@ fn main() {
 
     if matches.opt_present("h") {
         print_usage();
+    }
+    if matches.opt_present("V") {
+        println!("tail version {}", env!("CARGO_PKG_VERSION"));
+        return;
     }
 
     if matches.free.is_empty() {
