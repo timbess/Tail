@@ -63,7 +63,7 @@ enum ModificationType {
 
 enum Input {
     File(File),
-    Stdin(std::io::Stdin)
+    Stdin(std::io::Stdin),
 }
 
 #[derive(Debug)]
@@ -122,7 +122,6 @@ fn print_usage() {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let program = args[0].clone();
 
     let mut opts = Options::new();
     opts.optopt("c", "bytes", "output the last NUM bytes", "NUM");
@@ -147,6 +146,7 @@ fn main() {
 
 
     let follow_opt = matches.opt_present("f");
+    let num_of_lines = matches.opt_str("n").unwrap_or(String::from("10"));
     let file_names: Vec<String> = matches.free;
 
     let mut watcher = Inotify::init().expect("Inotify failed to initialize");
@@ -157,7 +157,7 @@ fn main() {
         let mut fd = File::open(&file_name)
             .unwrap_or_else(|_| panic!("Failed to open file handle for: {}", &file_name));
         let mut sf = StatefulFile::new(fd, file_name);
-        initial_print(&mut sf, 10);
+        initial_print(&mut sf, &num_of_lines);
         sf.update_cursor();
         files.insert(wd, sf);
     }
@@ -192,9 +192,20 @@ fn follow(sf: &mut StatefulFile) {
     sf.update_cursor();
 }
 
-fn initial_print(sf: &mut StatefulFile, num_lines: usize) {
+fn initial_print(sf: &mut StatefulFile, num_lines_str: &String) {
     let mut last_n_lines = VecDeque::new();
-    for line in sf.fd.by_ref().lines().map(|l| l.unwrap()) {
+    let mut line_iter = sf.fd.by_ref().lines().map(|l| l.unwrap());
+    if num_lines_str.starts_with("+") {
+        let line_iter = line_iter.skip(num_lines_str.chars().skip(1).collect::<String>().parse::<usize>()
+            .unwrap_or_else(|_| panic!("Incorrect number of lines given: {}", &num_lines_str)));
+        for line in line_iter {
+            println!("{}", line);
+        }
+        return;
+    }
+    let num_lines = num_lines_str.parse::<usize>()
+        .unwrap_or_else(|_| panic!("Incorrect number of lines given: {}", &num_lines_str));
+    for line in line_iter {
         last_n_lines.push_front(line);
         if last_n_lines.len() > num_lines {
             last_n_lines.pop_back();
