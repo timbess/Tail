@@ -51,6 +51,23 @@ enum Input {
     Stdin(std::io::Stdin),
 }
 
+struct RingBuffer<T> {
+    backing_arr: Box<[Option<T>]>,
+    size: usize,
+}
+
+impl<T: std::clone::Clone> RingBuffer<T> {
+    fn new(cap: usize) -> Self {
+        RingBuffer {
+            backing_arr: vec![Default::default(); cap].into_boxed_slice(),
+            size: 0
+        }
+    }
+
+    fn push(elm: T) {
+    }
+}
+
 #[derive(Debug)]
 struct StatefulFile {
     pub fd: BufReader<File>,
