@@ -4,7 +4,7 @@ extern crate tail;
 
 use std::path::Path;
 use std::iter::Iterator;
-use std::io::{Read, BufRead};
+use std::io::{Read, BufRead, Write, BufWriter};
 use std::fs::File;
 use std::collections::HashMap;
 use inotify::{Inotify, WatchMask, EventMask};
@@ -126,12 +126,14 @@ fn follow(sf: &mut StatefulFile) {
 }
 
 fn initial_print(sf: &mut StatefulFile, num_lines_str: &String) {
-    let line_iter = sf.fd.by_ref().lines().map(|l| l.unwrap());
+    let mut writer = BufWriter::new(std::io::stdout());
+    let line_iter = (&mut sf.fd).lines().map(|l| l.unwrap());
     if num_lines_str.starts_with("+") {
         let line_iter = line_iter.skip(num_lines_str.chars().skip(1).collect::<String>().parse::<usize>()
             .unwrap_or_else(|_| panic!("Incorrect number of lines given: {}", &num_lines_str)));
         for line in line_iter {
-            println!("{}", line);
+            writer.write(line.as_bytes()).unwrap();
+            writer.write(b"\n").unwrap();
         }
         return;
     }
@@ -143,12 +145,15 @@ fn initial_print(sf: &mut StatefulFile, num_lines_str: &String) {
         last_n_lines.push_front(line);
     }
     while let Some(line) = last_n_lines.pop_back() {
-        println!("{}", line);
+        writer.write(line.as_bytes()).unwrap();
+        writer.write(b"\n").unwrap();
     }
 }
 
 fn print_from_cursor(sf: &mut StatefulFile) {
+    let mut writer = BufWriter::new(std::io::stdout());
     for line in sf.fd.by_ref().lines().map(|l| l.unwrap()) {
-        println!("{}", line);
+        writer.write(line.as_bytes()).unwrap();
+        writer.write(b"\n").unwrap();
     }
 }

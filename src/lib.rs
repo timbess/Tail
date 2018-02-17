@@ -29,11 +29,12 @@ impl<T: std::clone::Clone> RingBuffer<T> {
     }
 
     pub fn push_front(&mut self, elm: T) {
-        if self.backing_arr[self.tail].is_some() {
+        let new_tail = (self.tail + 1) % self.backing_arr.len();
+        if new_tail == self.head {
             self.head = (self.head + 1) % self.backing_arr.len();
         }
         std::mem::replace(&mut self.backing_arr[self.tail], Some(elm));
-        self.tail = (self.tail + 1) % self.backing_arr.len();
+        self.tail = new_tail;
     }
 
     #[allow(dead_code)]
