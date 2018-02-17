@@ -41,7 +41,7 @@ impl<T: std::clone::Clone> RingBuffer<T> {
         if self.head == self.tail {
             return None;
         }
-        // Handle negative modulus correctly. Unforunately % is remainder not modulo
+        // Handle negative modulus correctly. Unfortunately % is remainder not modulo
         self.tail = (((self.tail - 1) % self.backing_arr.len()) + self.backing_arr.len()) % self.backing_arr.len();
         self.backing_arr[self.tail].take()
    }
