@@ -1,5 +1,7 @@
 use std::fs::{File, Metadata};
-use std::io::{Seek, BufReader, SeekFrom};
+use std::io::{Seek, BufReader, SeekFrom, Read, ErrorKind, BufWriter, Write};
+use std::iter::FromIterator;
+use std::collections::{VecDeque};
 
 pub enum ModificationType {
     Added,
@@ -13,48 +15,98 @@ pub enum Input {
     Stdin(std::io::Stdin),
 }
 
-pub struct RingBuffer<T> {
-    backing_arr: Box<[Option<T>]>,
-    tail: usize,
-    head: usize
+pub struct BackwardsReader<'a> {
+    pieces: VecDeque<VecDeque<Vec<u8>>>,
+    num_of_lines: usize,
+    fd: &'a mut BufReader<File>,
+    total_newlines: usize,
+    first_read: bool,
+    last_offset: u64
 }
 
-impl<T: std::clone::Clone> RingBuffer<T> {
-    pub fn new(cap: usize) -> Self {
-        RingBuffer {
-            backing_arr: vec![Default::default(); cap].into_boxed_slice(),
-            tail: 0,
-            head: 0
+impl<'a> BackwardsReader<'a> {
+    pub fn new(num_of_lines: usize, fd: &'a mut BufReader<File>) -> Self {
+        let last_offset = fd.seek(SeekFrom::End(0))
+                                .unwrap_or_else(|_| { panic!("Failed to seek to end of file") });
+        BackwardsReader {
+            pieces: VecDeque::with_capacity(num_of_lines),
+            num_of_lines: num_of_lines,
+            fd: fd,
+            total_newlines: 0,
+            first_read: false,
+            last_offset: last_offset
         }
     }
 
-    pub fn push_front(&mut self, elm: T) {
-        let new_tail = (self.tail + 1) % self.backing_arr.len();
-        if new_tail == self.head {
-            self.head = (self.head + 1) % self.backing_arr.len();
+    fn read(&mut self) -> bool {
+        match self.fd.seek(SeekFrom::Current(-4096)) {
+            Ok(new_offset) => {
+                self.last_offset = new_offset;
+            },
+            Err(_) => {
+                self.fd.seek(SeekFrom::Start(0)).unwrap();
+                let mut buff = vec![0; (self.last_offset - 1) as usize];
+                self.fd.read_exact(buff.as_mut_slice())
+                    .unwrap_or_else(|_| { panic!("Incorrectly handled unexpected EOF. Probably an off by one error") });
+                let mut buff: VecDeque<Vec<u8>> = buff.split(|elm: &u8| {*elm == b'\n'}).map(|elm: &[u8]| elm.to_vec()).collect();
+                self.total_newlines += buff.len() - 1;
+                self.pieces.push_front(buff);
+                return false;
+            }
         }
-        std::mem::replace(&mut self.backing_arr[self.tail], Some(elm));
-        self.tail = new_tail;
+
+        let mut buff = vec![0; 4096];
+        self.fd.read_exact(buff.as_mut_slice())
+            .unwrap_or_else(|_| { panic!("Failed to read from end of file in BackwardsReader") });
+        if self.first_read && buff[buff.len() - 1] != b'\n' {
+            self.total_newlines += 1;
+            self.first_read = false;
+        }
+        let buff: VecDeque<Vec<u8>> = buff.split(|elm: &u8| {*elm == b'\n'}).map(|elm: &[u8]| elm.to_vec()).collect();
+        self.total_newlines += buff.len() - 1;
+        self.pieces.push_front(buff);
+
+        self.total_newlines < self.num_of_lines
     }
 
-    #[allow(dead_code)]
-    pub fn pop_front(&mut self) -> Option<T> {
-        if self.head == self.tail {
-            return None;
-        }
-        // Handle negative modulus correctly. Unfortunately % is remainder not modulo
-        self.tail = (((self.tail - 1) % self.backing_arr.len()) + self.backing_arr.len()) % self.backing_arr.len();
-        self.backing_arr[self.tail].take()
-   }
+    pub fn read_all(&mut self, writer: &mut BufWriter<std::io::Stdout>) {
+        while self.read() {}
 
-    pub fn pop_back(&mut self) -> Option<T> {
-        if self.head == self.tail {
-            return None;
+        // If we hit the top of the file early, there's no guarantee
+        // that total_newlines will be greater than num_of_lines due
+        // to the way failed backward seeks are handled in read()
+        if self.total_newlines > self.num_of_lines {
+            let mut first_chunk = self.pieces.pop_front().unwrap();
+            let pieces_to_discard = self.total_newlines - (self.num_of_lines + 1) as usize;
+            if pieces_to_discard > 0 {
+                for _ in 0..pieces_to_discard {
+                    first_chunk.pop_front().unwrap();
+                }
+                self.total_newlines -= pieces_to_discard;
+            }
+            self.pieces.push_front(first_chunk);
         }
-        let ret = self.backing_arr[self.head].take();
-        self.head = (self.head + 1) % self.backing_arr.len();
-        ret
-   }
+
+        let mut line = self.pieces.front_mut().unwrap().pop_front().unwrap();
+        while let Some(mut piece) = self.pieces.pop_front() {
+            if piece.len() == 1 {
+                line.append(piece.pop_front().unwrap().as_mut());
+            } else {
+                let mut last_chunk = piece.pop_back().unwrap();
+                for mut chunk in piece {
+                    line.append(&mut chunk);
+                    line.push(b'\n');
+                    writer.write(&line).unwrap();
+                    line.clear();
+                }
+                line.append(&mut last_chunk);
+            }
+        }
+        if !line.is_empty() {
+            line.push(b'\n');
+            writer.write(&line).unwrap();
+        }
+    }
 }
 
 #[derive(Debug)]

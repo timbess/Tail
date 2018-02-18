@@ -9,7 +9,7 @@ use std::fs::File;
 use std::collections::HashMap;
 use inotify::{Inotify, WatchMask, EventMask};
 use getopts::Options;
-use tail::{StatefulFile, ModificationType, RingBuffer};
+use tail::{StatefulFile, ModificationType, BackwardsReader};
 
 #[allow(dead_code)]
 static USAGE: &'static str = r#"Usage: tail [OPTION]... [FILE]...
@@ -127,10 +127,10 @@ fn follow(sf: &mut StatefulFile) {
 
 fn initial_print(sf: &mut StatefulFile, num_lines_str: &String) {
     let mut writer = BufWriter::new(std::io::stdout());
-    let line_iter = (&mut sf.fd).lines().map(|l| l.unwrap());
     if num_lines_str.starts_with("+") {
-        let line_iter = line_iter.skip(num_lines_str.chars().skip(1).collect::<String>().parse::<usize>()
-            .unwrap_or_else(|_| panic!("Incorrect number of lines given: {}", &num_lines_str)));
+        let line_iter = (&mut sf.fd).lines().map(|l| l.unwrap())
+            .skip(num_lines_str.chars().skip(1).collect::<String>().parse::<usize>()
+                .unwrap_or_else(|_| panic!("Incorrect number of lines given: {}", &num_lines_str)));
         for line in line_iter {
             writer.write(line.as_bytes()).unwrap();
             writer.write(b"\n").unwrap();
@@ -140,14 +140,9 @@ fn initial_print(sf: &mut StatefulFile, num_lines_str: &String) {
     let num_lines = num_lines_str.parse::<usize>()
         .unwrap_or_else(|_| panic!("Incorrect number of lines given: {}", &num_lines_str));
 
-    let mut last_n_lines = RingBuffer::new(num_lines);
-    for line in line_iter {
-        last_n_lines.push_front(line);
-    }
-    while let Some(line) = last_n_lines.pop_back() {
-        writer.write(line.as_bytes()).unwrap();
-        writer.write(b"\n").unwrap();
-    }
+    let mut reader = BackwardsReader::new(num_lines, &mut sf.fd);
+    reader.read_all(&mut writer);
+    writer.flush().unwrap();
 }
 
 fn print_from_cursor(sf: &mut StatefulFile) {
@@ -156,4 +151,5 @@ fn print_from_cursor(sf: &mut StatefulFile) {
         writer.write(line.as_bytes()).unwrap();
         writer.write(b"\n").unwrap();
     }
+    writer.flush().unwrap();
 }
