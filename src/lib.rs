@@ -1,7 +1,8 @@
 use std::fs::{File, Metadata};
-use std::io::{Seek, BufReader, SeekFrom, Read, ErrorKind, BufWriter, Write};
-use std::iter::FromIterator;
+use std::io::{Seek, BufReader, SeekFrom, Read, BufWriter, Write};
 use std::collections::{VecDeque};
+
+const BUFFER_SIZE: i64 = 4096;
 
 pub enum ModificationType {
     Added,
@@ -33,34 +34,42 @@ impl<'a> BackwardsReader<'a> {
             num_of_lines: num_of_lines,
             fd: fd,
             total_newlines: 0,
-            first_read: false,
+            first_read: true,
             last_offset: last_offset
         }
     }
 
     fn read(&mut self) -> bool {
-        match self.fd.seek(SeekFrom::Current(-4096)) {
+        match self.fd.seek(SeekFrom::Current(-BUFFER_SIZE)) {
             Ok(new_offset) => {
                 self.last_offset = new_offset;
             },
             Err(_) => {
-                self.fd.seek(SeekFrom::Start(0)).unwrap();
-                let mut buff = vec![0; (self.last_offset - 1) as usize];
-                self.fd.read_exact(buff.as_mut_slice())
-                    .unwrap_or_else(|_| { panic!("Incorrectly handled unexpected EOF. Probably an off by one error") });
-                let mut buff: VecDeque<Vec<u8>> = buff.split(|elm: &u8| {*elm == b'\n'}).map(|elm: &[u8]| elm.to_vec()).collect();
-                self.total_newlines += buff.len() - 1;
-                self.pieces.push_front(buff);
+                if self.last_offset > 0 {
+                    self.fd.seek(SeekFrom::Start(0)).unwrap();
+                    let mut buff = vec![0; self.last_offset as usize];
+                    self.fd.read_exact(buff.as_mut_slice())
+                        .unwrap_or_else(|_| { panic!("Incorrectly handled unexpected EOF. Probably an off by one error") });
+                    if self.first_read && buff[buff.len() - 1] != b'\n' {
+                        self.total_newlines += 1;
+                        self.first_read = false;
+                        buff.push(b'\n');
+                    }
+                    let mut buff: VecDeque<Vec<u8>> = buff.split(|elm: &u8| {*elm == b'\n'}).map(|elm: &[u8]| elm.to_vec()).collect();
+                    self.total_newlines += buff.len() - 1;
+                    self.pieces.push_front(buff);
+                }
                 return false;
             }
         }
 
-        let mut buff = vec![0; 4096];
+        let mut buff = vec![0; BUFFER_SIZE as usize];
         self.fd.read_exact(buff.as_mut_slice())
             .unwrap_or_else(|_| { panic!("Failed to read from end of file in BackwardsReader") });
         if self.first_read && buff[buff.len() - 1] != b'\n' {
             self.total_newlines += 1;
             self.first_read = false;
+            buff.push(b'\n');
         }
         let buff: VecDeque<Vec<u8>> = buff.split(|elm: &u8| {*elm == b'\n'}).map(|elm: &[u8]| elm.to_vec()).collect();
         self.total_newlines += buff.len() - 1;
@@ -87,11 +96,21 @@ impl<'a> BackwardsReader<'a> {
             self.pieces.push_front(first_chunk);
         }
 
-        let mut line = self.pieces.front_mut().unwrap().pop_front().unwrap();
+        if self.pieces.is_empty() { return; }
+
+        let mut first_line = self.pieces.pop_front().unwrap();
+        let len = first_line.len();
+        let mut line: Vec<u8> = Vec::with_capacity(first_line.len());
+        for (ind, mut piece) in first_line.iter_mut().enumerate() {
+            line.append(&mut piece);
+            if ind != len {
+                line.push(b'\n');
+            }
+        }
         while let Some(mut piece) = self.pieces.pop_front() {
             if piece.len() == 1 {
                 line.append(piece.pop_front().unwrap().as_mut());
-            } else {
+            } else if piece.len() > 1 {
                 let mut last_chunk = piece.pop_back().unwrap();
                 for mut chunk in piece {
                     line.append(&mut chunk);
@@ -103,7 +122,6 @@ impl<'a> BackwardsReader<'a> {
             }
         }
         if !line.is_empty() {
-            line.push(b'\n');
             writer.write(&line).unwrap();
         }
     }
