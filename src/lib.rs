@@ -2,7 +2,7 @@ use std::fs::{File, Metadata};
 use std::io::{Seek, BufReader, SeekFrom, Read, BufWriter, Write};
 use std::collections::{VecDeque};
 
-const BUFFER_SIZE: i64 = 4096;
+const BUFFER_SIZE: u64 = 4096;
 
 pub enum ModificationType {
     Added,
@@ -40,14 +40,14 @@ impl<'a> BackwardsReader<'a> {
     }
 
     fn read(&mut self) -> bool {
-        match self.fd.seek(SeekFrom::Current(-BUFFER_SIZE)) {
+        match self.fd.seek(SeekFrom::Start((self.last_offset as u64) - BUFFER_SIZE)) {
             Ok(new_offset) => {
                 self.last_offset = new_offset;
             },
             Err(_) => {
                 if self.last_offset > 0 {
                     self.fd.seek(SeekFrom::Start(0)).unwrap();
-                    let mut buff = vec![0; self.last_offset as usize];
+                    let mut buff = vec![0; (self.last_offset) as usize];
                     self.fd.read_exact(buff.as_mut_slice())
                         .unwrap_or_else(|_| { panic!("Incorrectly handled unexpected EOF. Probably an off by one error") });
                     if self.first_read && buff[buff.len() - 1] != b'\n' {
@@ -74,7 +74,10 @@ impl<'a> BackwardsReader<'a> {
         let buff: VecDeque<Vec<u8>> = buff.split(|elm: &u8| {*elm == b'\n'}).map(|elm: &[u8]| elm.to_vec()).collect();
         self.total_newlines += buff.len() - 1;
         self.pieces.push_front(buff);
-
+        
+        if self.first_read {
+            self.first_read = false;
+        }
         self.total_newlines < self.num_of_lines
     }
 
@@ -86,7 +89,7 @@ impl<'a> BackwardsReader<'a> {
         // to the way failed backward seeks are handled in read()
         if self.total_newlines > self.num_of_lines {
             let mut first_chunk = self.pieces.pop_front().unwrap();
-            let pieces_to_discard = self.total_newlines - (self.num_of_lines + 1) as usize;
+            let pieces_to_discard = self.total_newlines - self.num_of_lines as usize;
             if pieces_to_discard > 0 {
                 for _ in 0..pieces_to_discard {
                     first_chunk.pop_front().unwrap();
@@ -98,15 +101,7 @@ impl<'a> BackwardsReader<'a> {
 
         if self.pieces.is_empty() { return; }
 
-        let mut first_line = self.pieces.pop_front().unwrap();
-        let len = first_line.len();
-        let mut line: Vec<u8> = Vec::with_capacity(first_line.len());
-        for (ind, mut piece) in first_line.iter_mut().enumerate() {
-            line.append(&mut piece);
-            if ind != len {
-                line.push(b'\n');
-            }
-        }
+        let mut line: Vec<u8> = Vec::new();
         while let Some(mut piece) = self.pieces.pop_front() {
             if piece.len() == 1 {
                 line.append(piece.pop_front().unwrap().as_mut());

@@ -135,6 +135,7 @@ fn initial_print(sf: &mut StatefulFile, num_lines_str: &String) {
             writer.write(line.as_bytes()).unwrap();
             writer.write(b"\n").unwrap();
         }
+        writer.flush().unwrap();
         return;
     }
     let num_lines = num_lines_str.parse::<usize>()
