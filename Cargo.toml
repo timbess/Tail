@@ -6,3 +6,7 @@ authors = ["tbess <timothy.bess@ignitionone.com>"]
 [dependencies]
 inotify = "0.5.0"
 getopts = "0.2.17"
+
+[lib]
+name = "tail"
+path = "src/lib.rs"

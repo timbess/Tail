@@ -1,13 +1,15 @@
 extern crate inotify;
 extern crate getopts;
+extern crate tail;
 
 use std::path::Path;
 use std::iter::Iterator;
-use std::fs::{File, Metadata};
-use std::collections::{HashMap, VecDeque};
-use std::io::{Read, BufRead, Seek, BufReader, SeekFrom};
+use std::io::{Read, BufRead, Write, BufWriter};
+use std::fs::File;
+use std::collections::HashMap;
 use inotify::{Inotify, WatchMask, EventMask};
 use getopts::Options;
+use tail::{StatefulFile, ModificationType, BackwardsReader};
 
 #[allow(dead_code)]
 static USAGE: &'static str = r#"Usage: tail [OPTION]... [FILE]...
@@ -17,31 +19,16 @@ With more than one FILE, precede each with a header giving the file name.
 With no FILE, or when FILE is -, read standard input.
 
 Mandatory arguments to long options are mandatory for short options too.
-  -c, --bytes=[+]NUM       output the last NUM bytes; or use -c +NUM to
+  -c, --bytes=[+]NUM      output the last NUM bytes; or use -c +NUM to
                              output starting with byte NUM of each file
-  -f, --follow[={name|descriptor}]
-                           output appended data as the file grows;
-                             an absent option argument means 'descriptor'
+  -f, --follow            output appended data as the file grows;
   -F                       same as --follow=name --retry
   -n, --lines=[+]NUM       output the last NUM lines, instead of the last 10;
                              or use -n +NUM to output starting with line NUM
-      --max-unchanged-stats=N
-                           with --follow=name, reopen a FILE which has not
-                             changed size after N (default 5) iterations
-                             to see if it has been unlinked or renamed
-                             (this is the usual case of rotated log files);
-                             with inotify, this option is rarely useful
-      --pid=PID            with -f, terminate after process ID, PID dies
-  -q, --quiet, --silent    never output headers giving file names
-      --retry              keep trying to open a file if it is inaccessible
-  -s, --sleep-interval=N   with -f, sleep for approximately N seconds
-                             (default 1.0) between iterations;
-                             with inotify and --pid=P, check process P at
-                             least once every N seconds
+  -q, --quiet              never output headers giving file names
   -v, --verbose            always output headers giving file names
-  -z, --zero-terminated    line delimiter is NUL, not newline
-      --help     display this help and exit
-      --version  output version information and exit
+  -h, --help     display this help and exit
+  -V, --version  output version information and exit
 
 NUM may have a multiplier suffix:
 b 512, kB 1000, K 1024, MB 1000*1000, M 1024*1024,
@@ -55,65 +42,6 @@ rotation).  Use --follow=name in that case.  That causes tail to track the
 named file in a way that accommodates renaming, removal and creation.
 "#;
 
-enum ModificationType {
-    Added,
-    Removed,
-    NoChange,
-}
-
-enum Input {
-    File(File),
-    Stdin(std::io::Stdin),
-}
-
-#[derive(Debug)]
-struct StatefulFile {
-    pub fd: BufReader<File>,
-    pub old_metadata: Metadata,
-    file_name: String,
-    cursor: SeekFrom,
-}
-
-impl StatefulFile {
-    fn new(fd: File, file_name: String) -> Self {
-        StatefulFile {
-            old_metadata: fd.metadata()
-                .unwrap_or_else(|_| { panic!("Could not retrieve metadata for file: {}", &file_name) }),
-            fd: BufReader::new(fd),
-            file_name: file_name,
-            cursor: SeekFrom::Start(0),
-        }
-    }
-
-    fn update_metadata(&mut self) {
-        self.old_metadata = self.fd.get_ref().metadata()
-            .unwrap_or_else(|_| { panic!("Could not retrieve metadata for file: {}", self.file_name) });
-    }
-
-    fn modification_type(&self) -> ModificationType {
-        let new_metadata = self.fd.get_ref().metadata()
-            .unwrap_or_else(|_| { panic!("Could not retrieve metadata for file: {}", self.file_name) });
-        if new_metadata.len() > self.old_metadata.len() {
-            ModificationType::Added
-        } else if new_metadata.len() < self.old_metadata.len() {
-            ModificationType::Removed
-        } else {
-            ModificationType::NoChange
-        }
-    }
-
-    fn seek_to_cursor(&mut self) {
-        self.fd.seek(self.cursor).unwrap();
-    }
-
-    fn update_cursor(&mut self) {
-        self.cursor = SeekFrom::Start(self.fd.seek(SeekFrom::Current(0)).unwrap());
-    }
-
-    fn reset_cursor(&mut self) {
-        self.cursor = SeekFrom::Start(0);
-    }
-}
 
 fn print_usage() {
     print!("{}", USAGE);
@@ -129,6 +57,7 @@ fn main() {
     opts.optflag("F", "", "same as follow with --retry");
     opts.optopt("n", "lines", "output the last NUM lines, instead of the last 10", "NUM");
     opts.optflag("h", "help", "print this help menu");
+    opts.optflag("V", "version", "version of program");
 
     let matches = match opts.parse(&args[1..]) {
         Ok(m) => m,
@@ -137,6 +66,10 @@ fn main() {
 
     if matches.opt_present("h") {
         print_usage();
+    }
+    if matches.opt_present("V") {
+        println!("tail version {}", env!("CARGO_PKG_VERSION"));
+        return;
     }
 
     if matches.free.is_empty() {
@@ -193,31 +126,31 @@ fn follow(sf: &mut StatefulFile) {
 }
 
 fn initial_print(sf: &mut StatefulFile, num_lines_str: &String) {
-    let mut last_n_lines = VecDeque::new();
-    let mut line_iter = sf.fd.by_ref().lines().map(|l| l.unwrap());
+    let mut writer = BufWriter::new(std::io::stdout());
     if num_lines_str.starts_with("+") {
-        let line_iter = line_iter.skip(num_lines_str.chars().skip(1).collect::<String>().parse::<usize>()
-            .unwrap_or_else(|_| panic!("Incorrect number of lines given: {}", &num_lines_str)));
+        let line_iter = (&mut sf.fd).lines().map(|l| l.unwrap())
+            .skip(num_lines_str.chars().skip(1).collect::<String>().parse::<usize>()
+                .unwrap_or_else(|_| panic!("Incorrect number of lines given: {}", &num_lines_str)));
         for line in line_iter {
-            println!("{}", line);
+            writer.write(line.as_bytes()).unwrap();
+            writer.write(b"\n").unwrap();
         }
+        writer.flush().unwrap();
         return;
     }
     let num_lines = num_lines_str.parse::<usize>()
         .unwrap_or_else(|_| panic!("Incorrect number of lines given: {}", &num_lines_str));
-    for line in line_iter {
-        last_n_lines.push_front(line);
-        if last_n_lines.len() > num_lines {
-            last_n_lines.pop_back();
-        }
-    }
-    while !last_n_lines.is_empty() {
-        println!("{}", last_n_lines.pop_back().unwrap());
-    }
+
+    let mut reader = BackwardsReader::new(num_lines, &mut sf.fd);
+    reader.read_all(&mut writer);
+    writer.flush().unwrap();
 }
 
 fn print_from_cursor(sf: &mut StatefulFile) {
+    let mut writer = BufWriter::new(std::io::stdout());
     for line in sf.fd.by_ref().lines().map(|l| l.unwrap()) {
-        println!("{}", line);
+        writer.write(line.as_bytes()).unwrap();
+        writer.write(b"\n").unwrap();
     }
+    writer.flush().unwrap();
 }
