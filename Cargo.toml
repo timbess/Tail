@@ -1,7 +1,11 @@
 [package]
 name = "tail"
 version = "0.1.0"
-authors = ["tbess <timothy.bess@ignitionone.com>"]
+authors = ["Timothy Bess <tdbgamer@gmail.com>"]
+description = "Tail implementation in Rust that is performant and resistant to file truncations"
+repository = "https://github.com/tdbgamer/Tail"
+readme = "README.md"
+license = "Apache-2.0"
 
 [dependencies]
 inotify = "0.5.0"
