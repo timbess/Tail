@@ -49,26 +49,36 @@ impl<'a> BackwardsReader<'a> {
         }
     }
 
+    fn handle_partial_read(&mut self) {
+        if self.last_offset > 0 {
+            self.fd.seek(SeekFrom::Start(0)).unwrap();
+            let mut buff = vec![0; (self.last_offset) as usize];
+            self.fd.read_exact(buff.as_mut_slice())
+                .unwrap_or_else(|_| { panic!("Incorrectly handled unexpected EOF. Probably an off by one error") });
+            if self.first_read && buff[buff.len() - 1] != b'\n' {
+                self.total_newlines += 1;
+                self.first_read = false;
+                buff.push(b'\n');
+            }
+            let buff: VecDeque<Vec<u8>> = buff.split(|elm: &u8| {*elm == b'\n'}).map(|elm: &[u8]| elm.to_vec()).collect();
+            self.total_newlines += buff.len() - 1;
+            self.pieces.push_front(buff);
+        }
+    }
+
     fn read(&mut self) -> bool {
-        match self.fd.seek(SeekFrom::Start((self.last_offset as u64) - BUFFER_SIZE)) {
+        let seek_offset = if (self.last_offset as i64) - (BUFFER_SIZE as i64) >= 0 {
+            self.last_offset - BUFFER_SIZE
+        } else {
+            self.handle_partial_read();
+            return false;
+        };
+        match self.fd.seek(SeekFrom::Start(seek_offset)) {
             Ok(new_offset) => {
                 self.last_offset = new_offset;
             },
             Err(_) => {
-                if self.last_offset > 0 {
-                    self.fd.seek(SeekFrom::Start(0)).unwrap();
-                    let mut buff = vec![0; (self.last_offset) as usize];
-                    self.fd.read_exact(buff.as_mut_slice())
-                        .unwrap_or_else(|_| { panic!("Incorrectly handled unexpected EOF. Probably an off by one error") });
-                    if self.first_read && buff[buff.len() - 1] != b'\n' {
-                        self.total_newlines += 1;
-                        self.first_read = false;
-                        buff.push(b'\n');
-                    }
-                    let mut buff: VecDeque<Vec<u8>> = buff.split(|elm: &u8| {*elm == b'\n'}).map(|elm: &[u8]| elm.to_vec()).collect();
-                    self.total_newlines += buff.len() - 1;
-                    self.pieces.push_front(buff);
-                }
+                self.handle_partial_read();
                 return false;
             }
         }
