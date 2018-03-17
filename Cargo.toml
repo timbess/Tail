@@ -1,6 +1,6 @@
 [package]
 name = "tail"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Timothy Bess <tdbgamer@gmail.com>"]
 description = "Tail implementation in Rust that is performant and resistant to file truncations"
 repository = "https://github.com/tdbgamer/Tail"
