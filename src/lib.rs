@@ -16,6 +16,16 @@ pub enum Input {
     Stdin(std::io::Stdin),
 }
 
+/// Reads file backwards to efficiently retrieve the last N lines
+///
+/// # Examples
+///
+/// ```
+/// let mut writer = BufWriter::new(std::io::stdout());
+/// let mut reader = BackwardsReader::new(10, &mut writer);
+/// reader.read_all(&mut writer);
+/// writer.flush().unwrap();
+/// ```
 pub struct BackwardsReader<'a> {
     pieces: VecDeque<VecDeque<Vec<u8>>>,
     num_of_lines: usize,
@@ -81,7 +91,7 @@ impl<'a> BackwardsReader<'a> {
         self.total_newlines < self.num_of_lines
     }
 
-    pub fn read_all(&mut self, writer: &mut BufWriter<std::io::Stdout>) {
+    pub fn read_all<T: Write>(&mut self, writer: &mut BufWriter<T>) {
         while self.read() {}
 
         // If we hit the top of the file early, there's no guarantee
